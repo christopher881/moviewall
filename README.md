@@ -54,7 +54,7 @@ Open <http://localhost:3000>. You'll be redirected to `/dashboard`.
 
 ## 5. Use the admin
 
-1. **Posters** → click **Upload**. Drop in a JPG / PNG / WEBP. Fill in title, year, etc.
+1. **Posters** → click **Upload**. Drop in a JPG / PNG / WEBP / PDF (PDFs auto-convert their first page to an image in your browser). Fill in title, year, etc.
 2. **Collections** → create one (e.g. "Halloween"). Open it. Use **+ Add posters** to fill it.
 3. **Displays** → create one named after your TV (e.g. "Living Room TV"). Open it.
 4. In the display settings, set **Active collection** to the one you just made and click **Save**.

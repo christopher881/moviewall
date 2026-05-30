@@ -4,6 +4,7 @@ import { useState } from "react";
 import { POSTER_BUCKET, supabase } from "@/lib/supabaseClient";
 import { Poster } from "@/types";
 import { fileExt, randomId } from "@/lib/utils";
+import { isPdfFile, pdfFirstPageToImage } from "@/lib/pdf";
 
 type FormState = {
   title: string;
@@ -23,7 +24,7 @@ const empty: FormState = {
   description: ""
 };
 
-const ALLOWED = ["jpg", "jpeg", "png", "webp"];
+const ALLOWED = ["jpg", "jpeg", "png", "webp", "pdf"];
 
 export default function PosterUploadForm({
   poster,
@@ -46,6 +47,7 @@ export default function PosterUploadForm({
   const [file, setFile] = useState<File | null>(null);
   const [preview, setPreview] = useState<string | null>(poster?.image_url ?? null);
   const [busy, setBusy] = useState(false);
+  const [converting, setConverting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [progress, setProgress] = useState<string | null>(null);
 
@@ -53,7 +55,7 @@ export default function PosterUploadForm({
     setForm((f) => ({ ...f, [k]: v }));
   }
 
-  function pick(f: File | null) {
+  async function pick(f: File | null) {
     setError(null);
     if (!f) {
       setFile(null);
@@ -62,13 +64,29 @@ export default function PosterUploadForm({
     }
     const ext = fileExt(f.name);
     if (!ALLOWED.includes(ext)) {
-      setError("Only JPG, PNG, or WEBP images are supported.");
+      setError("Only JPG, PNG, WEBP, or PDF files are supported.");
       return;
     }
     if (f.size > 25 * 1024 * 1024) {
-      setError("Image must be 25MB or smaller.");
+      setError("File must be 25MB or smaller.");
       return;
     }
+
+    if (isPdfFile(f)) {
+      setConverting(true);
+      setPreview(null);
+      try {
+        const converted = await pdfFirstPageToImage(f);
+        setFile(converted);
+        setPreview(URL.createObjectURL(converted));
+      } catch (err) {
+        setError(`Couldn't read PDF: ${(err as Error).message}`);
+      } finally {
+        setConverting(false);
+      }
+      return;
+    }
+
     setFile(f);
     setPreview(URL.createObjectURL(f));
   }
@@ -159,18 +177,22 @@ export default function PosterUploadForm({
       <div className="grid sm:grid-cols-[180px_1fr] gap-4">
         <label className="block cursor-pointer">
           <div className="relative aspect-[2/3] rounded-2xl overflow-hidden bg-ink-900 border border-dashed border-ink-600 flex items-center justify-center">
-            {preview ? (
+            {converting ? (
+              <span className="text-xs text-zinc-400 text-center px-2 animate-pulse">
+                Converting PDF…
+              </span>
+            ) : preview ? (
               // eslint-disable-next-line @next/next/no-img-element
               <img src={preview} alt="" className="absolute inset-0 w-full h-full object-cover" />
             ) : (
               <span className="text-xs text-zinc-500 text-center px-2">
-                Click to choose<br />JPG · PNG · WEBP
+                Click to choose<br />JPG · PNG · WEBP · PDF
               </span>
             )}
           </div>
           <input
             type="file"
-            accept="image/jpeg,image/png,image/webp"
+            accept="image/jpeg,image/png,image/webp,application/pdf"
             className="hidden"
             onChange={(e) => pick(e.target.files?.[0] ?? null)}
           />
@@ -252,11 +274,11 @@ export default function PosterUploadForm({
       )}
 
       <div className="flex gap-2 justify-end">
-        <button type="button" className="btn-secondary" onClick={onCancel} disabled={busy}>
+        <button type="button" className="btn-secondary" onClick={onCancel} disabled={busy || converting}>
           Cancel
         </button>
-        <button type="submit" className="btn-primary" disabled={busy}>
-          {busy ? "Saving…" : editing ? "Save changes" : "Upload poster"}
+        <button type="submit" className="btn-primary" disabled={busy || converting}>
+          {converting ? "Converting…" : busy ? "Saving…" : editing ? "Save changes" : "Upload poster"}
         </button>
       </div>
     </form>

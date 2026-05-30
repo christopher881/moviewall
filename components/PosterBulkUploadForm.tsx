@@ -4,10 +4,11 @@ import { useRef, useState } from "react";
 import { POSTER_BUCKET, supabase } from "@/lib/supabaseClient";
 import { Poster } from "@/types";
 import { fileExt, randomId } from "@/lib/utils";
+import { isPdfFile, pdfFirstPageToImage } from "@/lib/pdf";
 
-const ALLOWED = ["jpg", "jpeg", "png", "webp"];
+const ALLOWED = ["jpg", "jpeg", "png", "webp", "pdf"];
 
-type Status = "queued" | "uploading" | "done" | "error";
+type Status = "converting" | "queued" | "uploading" | "done" | "error";
 
 type Item = {
   id: string;
@@ -49,6 +50,8 @@ export default function PosterBulkUploadForm({
     if (!files) return;
     setGlobalError(null);
     const next: Item[] = [];
+    const pdfsToConvert: { id: string; file: File }[] = [];
+
     Array.from(files).forEach((f) => {
       const ext = fileExt(f.name);
       if (!ALLOWED.includes(ext)) {
@@ -73,15 +76,58 @@ export default function PosterBulkUploadForm({
         });
         return;
       }
+
+      const id = randomId();
+
+      if (isPdfFile(f)) {
+        next.push({
+          id,
+          file: f,
+          previewUrl: "",
+          title: titleFromFilename(f.name),
+          status: "converting"
+        });
+        pdfsToConvert.push({ id, file: f });
+        return;
+      }
+
       next.push({
-        id: randomId(),
+        id,
         file: f,
         previewUrl: URL.createObjectURL(f),
         title: titleFromFilename(f.name),
         status: "queued"
       });
     });
+
     setItems((prev) => [...prev, ...next]);
+
+    // Kick off PDF conversions in the background; update each item when done.
+    pdfsToConvert.forEach(async ({ id, file }) => {
+      try {
+        const img = await pdfFirstPageToImage(file);
+        setItems((prev) =>
+          prev.map((it) =>
+            it.id === id
+              ? {
+                  ...it,
+                  file: img,
+                  previewUrl: URL.createObjectURL(img),
+                  status: "queued"
+                }
+              : it
+          )
+        );
+      } catch (err) {
+        setItems((prev) =>
+          prev.map((it) =>
+            it.id === id
+              ? { ...it, status: "error", error: (err as Error).message }
+              : it
+          )
+        );
+      }
+    });
   }
 
   function removeItem(id: string) {
@@ -159,6 +205,10 @@ export default function PosterBulkUploadForm({
   const total = items.length;
   const done = items.filter((it) => it.status === "done").length;
   const errored = items.filter((it) => it.status === "error").length;
+  const stillConverting = items.some((it) => it.status === "converting");
+  const uploadableCount = items.filter(
+    (it) => it.status === "queued" || it.status === "error"
+  ).length;
 
   return (
     <div className="space-y-4">
@@ -178,11 +228,11 @@ export default function PosterBulkUploadForm({
         <p className="text-zinc-300">
           Drop poster images here, or <span className="text-gold underline">click to choose</span>
         </p>
-        <p className="text-xs text-zinc-500 mt-1">JPG · PNG · WEBP · up to 25 MB each</p>
+        <p className="text-xs text-zinc-500 mt-1">JPG · PNG · WEBP · PDF · up to 25 MB each</p>
         <input
           ref={fileInputRef}
           type="file"
-          accept="image/jpeg,image/png,image/webp"
+          accept="image/jpeg,image/png,image/webp,application/pdf"
           multiple
           className="hidden"
           onChange={(e) => addFiles(e.target.files)}
@@ -219,7 +269,8 @@ export default function PosterBulkUploadForm({
                   <p className="text-xs text-red-400 mt-0.5">{it.error}</p>
                 )}
               </div>
-              <div className="text-xs w-16 text-right shrink-0">
+              <div className="text-xs w-20 text-right shrink-0">
+                {it.status === "converting" && <span className="text-zinc-400 animate-pulse">Converting…</span>}
                 {it.status === "queued" && <span className="text-zinc-500">Ready</span>}
                 {it.status === "uploading" && <span className="text-gold">Uploading…</span>}
                 {it.status === "done" && <span className="text-teal-400">Done ✓</span>}
@@ -266,16 +317,21 @@ export default function PosterBulkUploadForm({
           <button
             type="button"
             className="btn-primary"
-            disabled={busy || items.length === 0 || items.every((it) => it.status === "done")}
+            disabled={
+              busy ||
+              stillConverting ||
+              items.length === 0 ||
+              uploadableCount === 0
+            }
             onClick={startUpload}
           >
             {busy
               ? "Uploading…"
+              : stillConverting
+              ? "Converting PDFs…"
               : done > 0 && done < total
               ? "Retry remaining"
-              : `Upload ${items.filter((it) => it.status !== "done").length} poster${
-                  items.filter((it) => it.status !== "done").length === 1 ? "" : "s"
-                }`}
+              : `Upload ${uploadableCount} poster${uploadableCount === 1 ? "" : "s"}`}
           </button>
         </div>
       </div>
