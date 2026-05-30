@@ -30,7 +30,7 @@ Built with **Next.js (App Router) + TypeScript + Supabase + Tailwind CSS**.
 
 This creates the tables (`posters`, `collections`, `collection_posters`, `displays`, `schedules`), the public `movie-posters` storage bucket, the storage / RLS policies, and enables Realtime on every table.
 
-> **Auth note for V1:** The admin portal isn't password-protected and RLS allows the anon role full access so the app works out of the box. Keep the URL private (or put it behind a Vercel password) and tighten the policies once you add real auth.
+> **Auth note:** The admin portal has a simple password gate (see [Admin password](#admin-password) below). RLS still allows the anon role full access at the database level — the gate prevents random people from loading the admin UI. Tighten the RLS policies if you want stricter database-level enforcement.
 
 ## 3. Verify the storage bucket
 
@@ -151,6 +151,35 @@ Three rule types are shipped in V1:
 To use schedules, set the display's **mode** to `scheduled` in its settings page.
 
 ---
+
+## Admin password
+
+The admin lives behind a password set via env vars. The **TV display page** (`/display/[id]`) stays public — TVs never need to log in.
+
+Set these in `.env.local` (or in Vercel → Settings → Environment Variables):
+
+```
+ADMIN_PASSWORD=pick-something-long
+AUTH_COOKIE_SECRET=long-random-string
+```
+
+Generate `AUTH_COOKIE_SECRET` with:
+```bash
+openssl rand -hex 32
+```
+
+Behavior:
+
+- **If `ADMIN_PASSWORD` is set:** every admin route redirects to `/login` until you enter the password. After login, a signed `HttpOnly` cookie keeps you signed in for ~1 year on that device. Click **Sign out** in the sidebar to clear it.
+- **If `ADMIN_PASSWORD` is empty / unset:** the admin is open (no login). Useful for local dev.
+
+Notes:
+
+- `ADMIN_PASSWORD` is a **server-only** env var (no `NEXT_PUBLIC_` prefix), so it never ships in the client bundle.
+- The cookie value is an HMAC of the password using `AUTH_COOKIE_SECRET` — it can't be forged without that secret.
+- Public routes that bypass the gate: `/login`, `/display/*`, `/api/login`, `/api/logout`, Next.js assets.
+
+After adding these env vars on Vercel, **redeploy** so the new build picks them up.
 
 ## Customizing the look
 

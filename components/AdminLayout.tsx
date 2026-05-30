@@ -8,14 +8,20 @@ export function useMobileMenu() {
   return useContext(MobileMenuContext);
 }
 
-export default function AdminLayout({ children }: { children: React.ReactNode }) {
+export default function AdminLayout({
+  children,
+  authEnabled = false
+}: {
+  children: React.ReactNode;
+  authEnabled?: boolean;
+}) {
   const [mobileOpen, setMobileOpen] = useState(false);
 
   return (
     <div className="min-h-screen flex bg-ink-950">
       {/* Desktop sidebar */}
       <aside className="hidden md:flex md:flex-col w-64 shrink-0 border-r border-ink-700 bg-ink-900">
-        <SidebarNav />
+        <SidebarNav authEnabled={authEnabled} />
       </aside>
 
       {/* Mobile drawer */}
@@ -26,7 +32,7 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
             onClick={() => setMobileOpen(false)}
           />
           <aside className="absolute inset-y-0 left-0 w-72 bg-ink-900 border-r border-ink-700 shadow-2xl">
-            <SidebarNav onNavigate={() => setMobileOpen(false)} />
+            <SidebarNav authEnabled={authEnabled} onNavigate={() => setMobileOpen(false)} />
           </aside>
         </div>
       )}
