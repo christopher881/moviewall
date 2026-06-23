@@ -72,12 +72,12 @@ type Rotation = 0 | 90 | 180 | 270;
 
 export default function PosterSlideshow({
   displayId,
-  rotation = 0
+  urlRotation
 }: {
   displayId: string;
-  rotation?: Rotation;
+  /** ?rotate= override from the URL. Wins over the saved display.rotation if present. */
+  urlRotation?: Rotation;
 }) {
-  const rotClass = `tv-rot-${rotation}`;
   const [mounted, setMounted] = useState(false);
   const [display, setDisplay] = useState<Display | null>(null);
   const [posters, setPosters] = useState<Poster[]>([]);
@@ -243,6 +243,11 @@ export default function PosterSlideshow({
     window.addEventListener("online", onOnline);
     return () => window.removeEventListener("online", onOnline);
   }, [loadAll]);
+
+  // URL ?rotate= wins over the saved value so you can test orientations without saving.
+  const savedRotation = (display?.rotation ?? 0) as Rotation;
+  const effectiveRotation: Rotation = urlRotation ?? savedRotation;
+  const rotClass = `tv-rot-${effectiveRotation}`;
 
   // Render
   if (!mounted || !display) {

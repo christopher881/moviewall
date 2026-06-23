@@ -71,14 +71,20 @@ Open <http://localhost:3000>. You'll be redirected to `/dashboard`.
 
 ### My TV is mounted sideways and the poster is rotated wrong
 
-Smart TV browsers don't know the panel was physically rotated 90°. Append `?rotate=90` (or `180`/`270`) to the URL and the page rotates its content to match:
+Smart TV browsers usually don't know the panel was physically rotated 90°, so the page renders in landscape and the poster ends up squished sideways.
 
-```
-https://<your-domain>/display/<displayId>?rotate=90    # most common: TV turned clockwise
-https://<your-domain>/display/<displayId>?rotate=270   # TV turned counter-clockwise
-```
+Fix it from the admin: open the display's settings page → **Screen rotation** → pick the value that orients the content correctly:
 
-The page swaps width/height after rotating so it fills the physical screen edge-to-edge.
+| TV mounted how | Pick |
+|---|---|
+| Normal landscape | None |
+| Turned 90° clockwise (top of TV now on the right) | 270° ⟲ |
+| Upside down | 180° |
+| Turned 90° counter-clockwise (top of TV now on the left) | 90° ⟳ |
+
+Save — the TV updates instantly. The page swaps width/height after rotating so it fills the screen edge-to-edge.
+
+You can also override the saved value temporarily from the URL: `?rotate=90`, `?rotate=180`, or `?rotate=270`. Handy for testing without committing to a setting.
 
 ## 7. Deploy
 

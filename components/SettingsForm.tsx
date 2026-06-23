@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { supabase } from "@/lib/supabaseClient";
-import { Collection, Display, DisplayMode, FitMode, Poster, TransitionStyle } from "@/types";
+import { Collection, Display, DisplayMode, FitMode, Poster, Rotation, TransitionStyle } from "@/types";
 
 type Props = {
   display: Display;
@@ -41,6 +41,7 @@ export default function SettingsForm({ display, collections, posters, onSaved }:
         fit_mode: form.fit_mode,
         transition_style: form.transition_style,
         show_overlay: form.show_overlay,
+        rotation: form.rotation ?? 0,
         sleep_enabled: form.sleep_enabled,
         sleep_time: form.sleep_time,
         wake_time: form.wake_time
@@ -171,6 +172,37 @@ export default function SettingsForm({ display, collections, posters, onSaved }:
             <option value="slide">Slide</option>
             <option value="none">None</option>
           </select>
+        </div>
+      </div>
+
+      <div>
+        <span className="label">
+          Screen rotation
+          <span className="block text-[10px] normal-case tracking-normal text-zinc-500 mt-0.5">
+            Only set this if your TV is physically mounted sideways and its browser stays in landscape mode.
+          </span>
+        </span>
+        <div className="flex flex-wrap gap-2">
+          {[
+            { v: 0 as Rotation, l: "None" },
+            { v: 90 as Rotation, l: "90° ⟳" },
+            { v: 180 as Rotation, l: "180°" },
+            { v: 270 as Rotation, l: "270° ⟲" }
+          ].map((opt) => (
+            <button
+              key={opt.v}
+              type="button"
+              onClick={() => update("rotation", opt.v)}
+              className={
+                "btn px-3 py-1.5 text-xs " +
+                ((form.rotation ?? 0) === opt.v
+                  ? "bg-gold-500 text-ink-950"
+                  : "bg-ink-700 text-white border border-ink-600 hover:bg-ink-600")
+              }
+            >
+              {opt.l}
+            </button>
+          ))}
         </div>
       </div>
 

@@ -1,10 +1,10 @@
 import PosterSlideshow from "@/components/PosterSlideshow";
+import type { Rotation } from "@/types";
 
 export const dynamic = "force-dynamic";
 export const runtime = "edge";
 
-const ALLOWED = [0, 90, 180, 270] as const;
-type Rotation = (typeof ALLOWED)[number];
+const ALLOWED: readonly number[] = [0, 90, 180, 270];
 
 export default async function DisplayPage({
   params,
@@ -15,7 +15,14 @@ export default async function DisplayPage({
 }) {
   const { displayId } = await params;
   const { rotate } = await searchParams;
-  const r = Number(rotate ?? 0);
-  const rotation: Rotation = (ALLOWED as readonly number[]).includes(r) ? (r as Rotation) : 0;
-  return <PosterSlideshow displayId={displayId} rotation={rotation} />;
+
+  // Only treat the URL param as an override when it's actually present and valid.
+  // Otherwise the slideshow falls back to the rotation saved on the display row.
+  let urlRotation: Rotation | undefined = undefined;
+  if (rotate !== undefined) {
+    const r = Number(rotate);
+    if (ALLOWED.includes(r)) urlRotation = r as Rotation;
+  }
+
+  return <PosterSlideshow displayId={displayId} urlRotation={urlRotation} />;
 }

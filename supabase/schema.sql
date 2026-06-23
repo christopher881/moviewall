@@ -48,6 +48,7 @@ create table if not exists displays (
   fit_mode            text default 'cover',
   transition_style    text default 'fade',
   show_overlay        boolean default false,
+  rotation            integer default 0,
   sleep_enabled       boolean default false,
   sleep_time          text,
   wake_time           text,

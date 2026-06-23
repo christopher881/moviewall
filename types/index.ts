@@ -2,6 +2,7 @@ export type FitMode = "cover" | "contain";
 export type TransitionStyle = "fade" | "slide" | "none";
 export type DisplayMode = "single" | "collection" | "scheduled";
 export type ScheduleType = "weekly" | "date_range" | "daily_time";
+export type Rotation = 0 | 90 | 180 | 270;
 
 export interface Poster {
   id: string;
@@ -48,6 +49,7 @@ export interface Display {
   fit_mode: FitMode;
   transition_style: TransitionStyle;
   show_overlay: boolean;
+  rotation: Rotation;
   sleep_enabled: boolean;
   sleep_time: string | null;
   wake_time: string | null;
