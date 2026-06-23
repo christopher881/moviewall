@@ -43,7 +43,8 @@ export default function FullScreenPosterDisplay({ poster, display }: Props) {
     return () => cancelAnimationFrame(id);
   }, [poster, active, display.transition_style]);
 
-  const fitClass = display.fit_mode === "contain" ? "object-contain" : "object-cover";
+  const blurMode = display.fit_mode === "blur";
+  const fitClass = blurMode || display.fit_mode === "contain" ? "object-contain" : "object-cover";
   const transition = display.transition_style;
 
   return (
@@ -66,13 +67,27 @@ export default function FullScreenPosterDisplay({ poster, display }: Props) {
         return (
           <div key={idx} className={`${base} ${style}`} aria-hidden={!isActive}>
             {p ? (
-              // eslint-disable-next-line @next/next/no-img-element
-              <img
-                src={p.image_url}
-                alt=""
-                className={`absolute inset-0 w-full h-full ${fitClass}`}
-                draggable={false}
-              />
+              <>
+                {blurMode && (
+                  // Ambient blurred background: same image, dimmed + heavily blurred,
+                  // scaled past the edges so blur clipping isn't visible.
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img
+                    src={p.image_url}
+                    alt=""
+                    aria-hidden
+                    className="absolute inset-0 w-full h-full object-cover scale-125 blur-2xl brightness-50"
+                    draggable={false}
+                  />
+                )}
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img
+                  src={p.image_url}
+                  alt=""
+                  className={`absolute inset-0 w-full h-full ${fitClass}`}
+                  draggable={false}
+                />
+              </>
             ) : null}
           </div>
         );

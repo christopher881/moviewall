@@ -9,7 +9,9 @@ export default function DisplayPreview({
   display: Display;
   poster?: Poster | null;
 }) {
-  const fit = display.fit_mode === "contain" ? "object-contain" : "object-cover";
+  const blurMode = display.fit_mode === "blur";
+  const fit =
+    blurMode || display.fit_mode === "contain" ? "object-contain" : "object-cover";
   return (
     <div className="card overflow-hidden">
       <div className="p-3 text-xs text-zinc-400 flex items-center justify-between border-b border-ink-700">
@@ -20,6 +22,15 @@ export default function DisplayPreview({
         <div className="relative w-full max-w-[260px] aspect-[9/16] bg-black border border-ink-700 rounded-xl overflow-hidden">
           {poster ? (
             <>
+              {blurMode && (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img
+                  src={poster.image_url}
+                  alt=""
+                  aria-hidden
+                  className="absolute inset-0 w-full h-full object-cover scale-125 blur-xl brightness-50"
+                />
+              )}
               {/* eslint-disable-next-line @next/next/no-img-element */}
               <img
                 src={poster.image_url}

@@ -1,4 +1,4 @@
-export type FitMode = "cover" | "contain";
+export type FitMode = "cover" | "contain" | "blur";
 export type TransitionStyle = "fade" | "slide" | "none";
 export type DisplayMode = "single" | "collection" | "scheduled";
 export type ScheduleType = "weekly" | "date_range" | "daily_time";

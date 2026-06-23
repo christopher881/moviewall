@@ -157,8 +157,9 @@ export default function SettingsForm({ display, collections, posters, onSaved }:
             value={form.fit_mode}
             onChange={(e) => update("fit_mode", e.target.value as FitMode)}
           >
-            <option value="cover">Cover</option>
-            <option value="contain">Contain</option>
+            <option value="cover">Cover — fill screen, may crop</option>
+            <option value="contain">Contain — show full poster, black bars</option>
+            <option value="blur">Blur fill — full poster with ambient glow</option>
           </select>
         </div>
         <div>
