@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabaseClient";
@@ -25,38 +25,98 @@ export default function CollectionDetailPage() {
   const [dragId, setDragId] = useState<string | null>(null);
   const [dragOverId, setDragOverId] = useState<string | null>(null);
 
+  // Highest sort_order we've handed out locally. Prevents rapid successive adds
+  // from all computing the same value before the realtime refresh lands.
+  const nextSortRef = useRef(0);
+  // Suppress the realtime refetch we trigger ourselves while writing an order.
+  const writingOrderRef = useRef(false);
+
+  /** Persist a specific ordering, re-packing sort_order to 0..n-1. */
+  const persistOrder = useCallback(
+    async (ordered: CollectionPosterWithPoster[]) => {
+      writingOrderRef.current = true;
+      setBusy(true);
+      try {
+        const changed = ordered
+          .map((it, idx) => ({ it, idx }))
+          .filter(({ it, idx }) => it.sort_order !== idx);
+        if (changed.length > 0) {
+          await Promise.all(
+            changed.map(({ it, idx }) =>
+              supabase
+                .from("collection_posters")
+                .update({ sort_order: idx })
+                .eq("id", it.id)
+            )
+          );
+        }
+        nextSortRef.current = ordered.length;
+      } catch (err) {
+        setError((err as Error).message);
+      } finally {
+        setBusy(false);
+        // Let the trailing realtime events settle before re-enabling refetch.
+        setTimeout(() => {
+          writingOrderRef.current = false;
+        }, 600);
+      }
+    },
+    []
+  );
+
   const load = useCallback(async () => {
     if (!id) return;
-    const [c, items, allP] = await Promise.all([
+    const [c, linkRes, allP] = await Promise.all([
       supabase.from("collections").select("*").eq("id", id).maybeSingle(),
       supabase
         .from("collection_posters")
         .select("*, poster:posters(*)")
         .eq("collection_id", id)
-        .order("sort_order"),
+        .order("sort_order")
+        .order("created_at"),
       supabase.from("posters").select("*").order("title")
     ]);
-    if (c.error || items.error || allP.error) {
-      setError(c.error?.message || items.error?.message || allP.error?.message || "Load failed");
-    } else {
-      setCollection((c.data as Collection) ?? null);
-      setItems((items.data ?? []) as CollectionPosterWithPoster[]);
-      setAllPosters((allP.data ?? []) as Poster[]);
+    if (c.error || linkRes.error || allP.error) {
+      setError(
+        c.error?.message || linkRes.error?.message || allP.error?.message || "Load failed"
+      );
+      setLoading(false);
+      return;
     }
+
+    const rows = (linkRes.data ?? []) as CollectionPosterWithPoster[];
+    setCollection((c.data as Collection) ?? null);
+    setItems(rows);
+    setAllPosters((allP.data ?? []) as Poster[]);
+    nextSortRef.current = rows.length;
     setLoading(false);
-  }, [id]);
+
+    // Repair legacy/duplicate sort_order values (e.g. several posters added in
+    // quick succession all landing on the same number). Without unique values
+    // the up/down buttons have nothing to swap and appear to do nothing.
+    const needsRepair = rows.some((r, i) => r.sort_order !== i);
+    const hasDuplicates =
+      new Set(rows.map((r) => r.sort_order)).size !== rows.length;
+    if (rows.length > 1 && needsRepair && hasDuplicates) {
+      await persistOrder(rows);
+    }
+  }, [id, persistOrder]);
 
   useEffect(() => {
     load();
+    const onRemote = () => {
+      if (writingOrderRef.current) return;
+      load();
+    };
     const ch = supabase
       .channel(`collection-${id}`)
       .on(
         "postgres_changes",
         { event: "*", schema: "public", table: "collection_posters", filter: `collection_id=eq.${id}` },
-        load
+        onRemote
       )
-      .on("postgres_changes", { event: "*", schema: "public", table: "collections" }, load)
-      .on("postgres_changes", { event: "*", schema: "public", table: "posters" }, load)
+      .on("postgres_changes", { event: "*", schema: "public", table: "collections" }, onRemote)
+      .on("postgres_changes", { event: "*", schema: "public", table: "posters" }, onRemote)
       .subscribe();
     return () => {
       supabase.removeChannel(ch);
@@ -72,21 +132,24 @@ export default function CollectionDetailPage() {
   }, [allPosters, linkedIds, pickerQuery]);
 
   async function addPoster(posterId: string) {
-    setBusy(true);
+    // Reserve a slot synchronously so clicking several posters quickly doesn't
+    // give them all the same sort_order.
+    const sort = nextSortRef.current;
+    nextSortRef.current += 1;
     try {
-      const nextSort = items.length;
       const { error: iErr } = await supabase
         .from("collection_posters")
-        .insert({ collection_id: id, poster_id: posterId, sort_order: nextSort });
+        .insert({ collection_id: id, poster_id: posterId, sort_order: sort });
       if (iErr) throw iErr;
     } catch (err) {
       setError((err as Error).message);
-    } finally {
-      setBusy(false);
+      nextSortRef.current -= 1;
     }
   }
 
   async function removeLink(linkId: string) {
+    const remaining = items.filter((i) => i.id !== linkId);
+    setItems(remaining);
     setBusy(true);
     try {
       const { error: dErr } = await supabase
@@ -94,27 +157,17 @@ export default function CollectionDetailPage() {
         .delete()
         .eq("id", linkId);
       if (dErr) throw dErr;
-      // Re-pack sort_order so it stays clean.
-      const remaining = items.filter((i) => i.id !== linkId);
-      await Promise.all(
-        remaining.map((it, idx) =>
-          it.sort_order === idx
-            ? Promise.resolve()
-            : supabase
-                .from("collection_posters")
-                .update({ sort_order: idx })
-                .eq("id", it.id)
-        )
-      );
+      await persistOrder(remaining);
     } catch (err) {
       setError((err as Error).message);
+      await load();
     } finally {
       setBusy(false);
     }
   }
 
-  /** Move the dragged item to the dropped-on item's position and re-pack sort_order. */
-  async function reorderByDrop(sourceId: string, targetId: string) {
+  /** Move an item to another item's position, then re-pack. */
+  async function reorderTo(sourceId: string, targetId: string) {
     if (sourceId === targetId) return;
     const from = items.findIndex((i) => i.id === sourceId);
     const to = items.findIndex((i) => i.id === targetId);
@@ -124,71 +177,70 @@ export default function CollectionDetailPage() {
     const [moved] = next.splice(from, 1);
     next.splice(to, 0, moved);
 
-    // Optimistic local update so the grid doesn't jump while the writes land.
     setItems(next.map((it, idx) => ({ ...it, sort_order: idx })));
-
-    setBusy(true);
-    try {
-      await Promise.all(
-        next.map((it, idx) =>
-          it.sort_order === idx
-            ? Promise.resolve()
-            : supabase
-                .from("collection_posters")
-                .update({ sort_order: idx })
-                .eq("id", it.id)
-        )
-      );
-    } catch (err) {
-      setError((err as Error).message);
-      await load();
-    } finally {
-      setBusy(false);
-    }
+    await persistOrder(next);
   }
 
-  async function randomizeOrder() {
-    if (items.length < 2) return;
-    setBusy(true);
-    try {
-      // Fisher-Yates shuffle of the current item order, then write new sort_order values.
-      const shuffled = [...items];
-      for (let i = shuffled.length - 1; i > 0; i--) {
-        const j = Math.floor(Math.random() * (i + 1));
-        [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
-      }
-      await Promise.all(
-        shuffled.map((it, idx) =>
-          supabase
-            .from("collection_posters")
-            .update({ sort_order: idx })
-            .eq("id", it.id)
-        )
-      );
-    } catch (err) {
-      setError((err as Error).message);
-    } finally {
-      setBusy(false);
-    }
-  }
-
+  /**
+   * Step an item one slot up or down. Re-packs the whole list by position
+   * rather than swapping sort_order values — swapping breaks when two rows
+   * share the same number.
+   */
   async function move(linkId: string, dir: -1 | 1) {
     const idx = items.findIndex((i) => i.id === linkId);
     const swap = idx + dir;
     if (idx < 0 || swap < 0 || swap >= items.length) return;
-    setBusy(true);
-    try {
-      const a = items[idx];
-      const b = items[swap];
-      await Promise.all([
-        supabase.from("collection_posters").update({ sort_order: b.sort_order }).eq("id", a.id),
-        supabase.from("collection_posters").update({ sort_order: a.sort_order }).eq("id", b.id)
-      ]);
-    } catch (err) {
-      setError((err as Error).message);
-    } finally {
-      setBusy(false);
+
+    const next = [...items];
+    [next[idx], next[swap]] = [next[swap], next[idx]];
+
+    setItems(next.map((it, i) => ({ ...it, sort_order: i })));
+    await persistOrder(next);
+  }
+
+  async function randomizeOrder() {
+    if (items.length < 2) return;
+    const shuffled = [...items];
+    for (let i = shuffled.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
     }
+    setItems(shuffled.map((it, idx) => ({ ...it, sort_order: idx })));
+    await persistOrder(shuffled);
+  }
+
+  /**
+   * Pointer-based drag. HTML5 drag-and-drop never fires on touch devices, so we
+   * drive reordering from pointer events instead — one code path for mouse,
+   * trackpad, and finger.
+   */
+  function handleDragStart(e: React.PointerEvent, linkId: string) {
+    e.preventDefault();
+    e.stopPropagation();
+    (e.target as HTMLElement).setPointerCapture?.(e.pointerId);
+    setDragId(linkId);
+    setDragOverId(linkId);
+  }
+
+  function handleDragMove(e: React.PointerEvent) {
+    if (!dragId) return;
+    e.preventDefault();
+    const el = document
+      .elementFromPoint(e.clientX, e.clientY)
+      ?.closest<HTMLElement>("[data-link-id]");
+    const overId = el?.dataset.linkId;
+    if (overId && overId !== dragOverId) setDragOverId(overId);
+  }
+
+  function handleDragEnd(e: React.PointerEvent) {
+    if (!dragId) return;
+    e.preventDefault();
+    (e.target as HTMLElement).releasePointerCapture?.(e.pointerId);
+    const source = dragId;
+    const target = dragOverId;
+    setDragId(null);
+    setDragOverId(null);
+    if (target && target !== source) reorderTo(source, target);
   }
 
   if (loading) {
@@ -252,98 +304,91 @@ export default function CollectionDetailPage() {
           </div>
         ) : (
           <>
-          <div className="flex flex-wrap items-center gap-2">
-            <p className="text-xs text-zinc-500 mr-auto">
-              Drag posters to reorder, or use the ↑ ↓ buttons. Order here is the slideshow order.
-            </p>
-            <button
-              onClick={randomizeOrder}
-              className="btn-secondary sm:hidden text-xs"
-              disabled={busy || items.length < 2}
-            >
-              ⇄ Randomize
-            </button>
-          </div>
-          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-3 sm:gap-4 mt-3">
-            {items.map((it, idx) => (
-              <div
-                key={it.id}
-                draggable
-                onDragStart={(e) => {
-                  setDragId(it.id);
-                  e.dataTransfer.effectAllowed = "move";
-                }}
-                onDragOver={(e) => {
-                  e.preventDefault();
-                  e.dataTransfer.dropEffect = "move";
-                  if (dragOverId !== it.id) setDragOverId(it.id);
-                }}
-                onDragLeave={() => {
-                  if (dragOverId === it.id) setDragOverId(null);
-                }}
-                onDrop={(e) => {
-                  e.preventDefault();
-                  if (dragId) reorderByDrop(dragId, it.id);
-                  setDragId(null);
-                  setDragOverId(null);
-                }}
-                onDragEnd={() => {
-                  setDragId(null);
-                  setDragOverId(null);
-                }}
-                className={
-                  "card overflow-hidden flex flex-col cursor-move transition " +
-                  (dragId === it.id ? "opacity-40 " : "") +
-                  (dragOverId === it.id && dragId !== it.id
-                    ? "ring-2 ring-gold-500 "
-                    : "")
-                }
+            <div className="flex flex-wrap items-center gap-2">
+              <p className="text-xs text-zinc-500 mr-auto">
+                Drag the ⠿ handle to reorder, or use ↑ ↓. This is the slideshow order.
+              </p>
+              <button
+                onClick={randomizeOrder}
+                className="btn-secondary sm:hidden text-xs"
+                disabled={busy || items.length < 2}
               >
-                <div className="relative aspect-[2/3] bg-ink-900">
-                  {/* eslint-disable-next-line @next/next/no-img-element */}
-                  <img
-                    src={it.poster.image_url}
-                    alt={it.poster.title}
-                    className="absolute inset-0 w-full h-full object-cover pointer-events-none"
-                    loading="lazy"
-                  />
-                  <span className="absolute top-2 left-2 badge bg-black/60 border border-white/10">
-                    #{idx + 1}
-                  </span>
-                </div>
-                <div className="p-2">
-                  <p className="text-sm truncate">{it.poster.title}</p>
-                  <div className="flex justify-between mt-1">
-                    <div className="flex gap-1">
-                      <button
-                        className="btn-ghost text-xs px-2 py-1"
-                        disabled={busy || idx === 0}
-                        onClick={() => move(it.id, -1)}
-                        aria-label="Move up"
-                      >
-                        ↑
-                      </button>
-                      <button
-                        className="btn-ghost text-xs px-2 py-1"
-                        disabled={busy || idx === items.length - 1}
-                        onClick={() => move(it.id, 1)}
-                        aria-label="Move down"
-                      >
-                        ↓
-                      </button>
-                    </div>
+                ⇄ Randomize
+              </button>
+            </div>
+
+            <div
+              className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-3 sm:gap-4 mt-3"
+              onPointerMove={handleDragMove}
+              onPointerUp={handleDragEnd}
+              onPointerCancel={handleDragEnd}
+            >
+              {items.map((it, idx) => (
+                <div
+                  key={it.id}
+                  data-link-id={it.id}
+                  className={
+                    "card overflow-hidden flex flex-col transition " +
+                    (dragId === it.id ? "opacity-40 " : "") +
+                    (dragOverId === it.id && dragId && dragId !== it.id
+                      ? "ring-2 ring-gold-500 "
+                      : "")
+                  }
+                >
+                  <div className="relative aspect-[2/3] bg-ink-900">
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img
+                      src={it.poster.image_url}
+                      alt={it.poster.title}
+                      className="absolute inset-0 w-full h-full object-cover pointer-events-none"
+                      loading="lazy"
+                    />
+                    <span className="absolute top-2 left-2 badge bg-black/60 border border-white/10">
+                      #{idx + 1}
+                    </span>
                     <button
-                      className="btn-ghost text-xs px-2 py-1 text-red-400"
-                      disabled={busy}
-                      onClick={() => removeLink(it.id)}
+                      type="button"
+                      aria-label="Drag to reorder"
+                      onPointerDown={(e) => handleDragStart(e, it.id)}
+                      style={{ touchAction: "none" }}
+                      className="absolute top-1.5 right-1.5 w-8 h-8 rounded-lg bg-black/60 border border-white/10 text-white/80 flex items-center justify-center cursor-grab active:cursor-grabbing hover:bg-black/80"
                     >
-                      Remove
+                      ⠿
                     </button>
                   </div>
+                  <div className="p-2">
+                    <p className="text-sm truncate">{it.poster.title}</p>
+                    <div className="flex justify-between mt-1">
+                      <div className="flex gap-1">
+                        <button
+                          className="btn-ghost text-xs px-2 py-1"
+                          disabled={busy || idx === 0}
+                          onClick={() => move(it.id, -1)}
+                          aria-label="Move up"
+                        >
+                          ↑
+                        </button>
+                        <button
+                          className="btn-ghost text-xs px-2 py-1"
+                          disabled={busy || idx === items.length - 1}
+                          onClick={() => move(it.id, 1)}
+                          aria-label="Move down"
+                        >
+                          ↓
+                        </button>
+                      </div>
+                      <button
+                        className="btn-ghost text-xs px-2 py-1 text-red-400"
+                        disabled={busy}
+                        onClick={() => removeLink(it.id)}
+                      >
+                        Remove
+                      </button>
+                    </div>
+                  </div>
                 </div>
-              </div>
-            ))}
-          </div>
+              ))}
+            </div>
           </>
         )}
       </div>
@@ -370,7 +415,6 @@ export default function CollectionDetailPage() {
               {candidates.map((p) => (
                 <button
                   key={p.id}
-                  disabled={busy}
                   onClick={() => addPoster(p.id)}
                   className="card card-hover overflow-hidden text-left"
                 >
