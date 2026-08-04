@@ -42,6 +42,7 @@ export default function SettingsForm({ display, collections, posters, onSaved }:
         transition_style: form.transition_style,
         show_overlay: form.show_overlay,
         rotation: form.rotation ?? 0,
+        shuffle: form.shuffle ?? false,
         sleep_enabled: form.sleep_enabled,
         sleep_time: form.sleep_time,
         wake_time: form.wake_time
@@ -212,6 +213,11 @@ export default function SettingsForm({ display, collections, posters, onSaved }:
           label="Show poster overlay (title, year, etc.)"
           checked={form.show_overlay}
           onChange={(v) => update("show_overlay", v)}
+        />
+        <Toggle
+          label="Shuffle (random order)"
+          checked={form.shuffle ?? false}
+          onChange={(v) => update("shuffle", v)}
         />
         <Toggle
           label="Sleep mode"

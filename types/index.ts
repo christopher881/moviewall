@@ -50,6 +50,7 @@ export interface Display {
   transition_style: TransitionStyle;
   show_overlay: boolean;
   rotation: Rotation;
+  shuffle: boolean;
   sleep_enabled: boolean;
   sleep_time: string | null;
   wake_time: string | null;

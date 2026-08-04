@@ -7,16 +7,32 @@ export default function PosterCard({
   onEdit,
   onDelete,
   onAddToCollection,
-  onSetActive
+  onSetActive,
+  selectMode = false,
+  selected = false,
+  onToggleSelect
 }: {
   poster: Poster;
   onEdit?: (p: Poster) => void;
   onDelete?: (p: Poster) => void;
   onAddToCollection?: (p: Poster) => void;
   onSetActive?: (p: Poster) => void;
+  selectMode?: boolean;
+  selected?: boolean;
+  onToggleSelect?: (p: Poster) => void;
 }) {
+  const clickable = selectMode && onToggleSelect;
   return (
-    <div className="card card-hover overflow-hidden flex flex-col">
+    <div
+      className={
+        "card overflow-hidden flex flex-col transition " +
+        (selected
+          ? "ring-2 ring-gold-500 border-gold-500/50"
+          : "card-hover") +
+        (clickable ? " cursor-pointer" : "")
+      }
+      onClick={clickable ? () => onToggleSelect(poster) : undefined}
+    >
       <div className="relative aspect-[2/3] bg-ink-900">
         {/* eslint-disable-next-line @next/next/no-img-element */}
         <img
@@ -25,6 +41,18 @@ export default function PosterCard({
           className="absolute inset-0 w-full h-full object-cover"
           loading="lazy"
         />
+        {selectMode && (
+          <div
+            className={
+              "absolute top-2 right-2 w-6 h-6 rounded-full border-2 flex items-center justify-center text-xs " +
+              (selected
+                ? "bg-gold-500 border-gold-500 text-ink-950"
+                : "bg-black/40 border-white/70 text-transparent")
+            }
+          >
+            ✓
+          </div>
+        )}
         <div className="absolute top-2 left-2 flex gap-1">
           {poster.active ? (
             <span className="badge-active">Active</span>
@@ -50,7 +78,7 @@ export default function PosterCard({
         </p>
       </div>
 
-      <div className="flex flex-wrap gap-1 px-2 pb-2">
+      <div className={"flex flex-wrap gap-1 px-2 pb-2" + (selectMode ? " hidden" : "")}>
         {onEdit && (
           <button onClick={() => onEdit(poster)} className="btn-ghost text-xs px-2 py-1">
             Edit

@@ -22,6 +22,8 @@ export default function CollectionDetailPage() {
   const [pickerOpen, setPickerOpen] = useState(false);
   const [pickerQuery, setPickerQuery] = useState("");
   const [busy, setBusy] = useState(false);
+  const [dragId, setDragId] = useState<string | null>(null);
+  const [dragOverId, setDragOverId] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     if (!id) return;
@@ -111,6 +113,65 @@ export default function CollectionDetailPage() {
     }
   }
 
+  /** Move the dragged item to the dropped-on item's position and re-pack sort_order. */
+  async function reorderByDrop(sourceId: string, targetId: string) {
+    if (sourceId === targetId) return;
+    const from = items.findIndex((i) => i.id === sourceId);
+    const to = items.findIndex((i) => i.id === targetId);
+    if (from < 0 || to < 0) return;
+
+    const next = [...items];
+    const [moved] = next.splice(from, 1);
+    next.splice(to, 0, moved);
+
+    // Optimistic local update so the grid doesn't jump while the writes land.
+    setItems(next.map((it, idx) => ({ ...it, sort_order: idx })));
+
+    setBusy(true);
+    try {
+      await Promise.all(
+        next.map((it, idx) =>
+          it.sort_order === idx
+            ? Promise.resolve()
+            : supabase
+                .from("collection_posters")
+                .update({ sort_order: idx })
+                .eq("id", it.id)
+        )
+      );
+    } catch (err) {
+      setError((err as Error).message);
+      await load();
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function randomizeOrder() {
+    if (items.length < 2) return;
+    setBusy(true);
+    try {
+      // Fisher-Yates shuffle of the current item order, then write new sort_order values.
+      const shuffled = [...items];
+      for (let i = shuffled.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
+      }
+      await Promise.all(
+        shuffled.map((it, idx) =>
+          supabase
+            .from("collection_posters")
+            .update({ sort_order: idx })
+            .eq("id", it.id)
+        )
+      );
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function move(linkId: string, dir: -1 | 1) {
     const idx = items.findIndex((i) => i.id === linkId);
     const swap = idx + dir;
@@ -163,6 +224,14 @@ export default function CollectionDetailPage() {
             <Link href="/collections" className="btn-ghost hidden sm:inline-flex">
               ← Back
             </Link>
+            <button
+              onClick={randomizeOrder}
+              className="btn-secondary hidden sm:inline-flex"
+              disabled={busy || items.length < 2}
+              title="Shuffle the order of posters in this collection"
+            >
+              ⇄ Randomize
+            </button>
             <button onClick={() => setPickerOpen(true)} className="btn-primary">
               + Add posters
             </button>
@@ -182,15 +251,60 @@ export default function CollectionDetailPage() {
             </button>
           </div>
         ) : (
-          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-3 sm:gap-4">
+          <>
+          <div className="flex flex-wrap items-center gap-2">
+            <p className="text-xs text-zinc-500 mr-auto">
+              Drag posters to reorder, or use the ↑ ↓ buttons. Order here is the slideshow order.
+            </p>
+            <button
+              onClick={randomizeOrder}
+              className="btn-secondary sm:hidden text-xs"
+              disabled={busy || items.length < 2}
+            >
+              ⇄ Randomize
+            </button>
+          </div>
+          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-3 sm:gap-4 mt-3">
             {items.map((it, idx) => (
-              <div key={it.id} className="card overflow-hidden flex flex-col">
+              <div
+                key={it.id}
+                draggable
+                onDragStart={(e) => {
+                  setDragId(it.id);
+                  e.dataTransfer.effectAllowed = "move";
+                }}
+                onDragOver={(e) => {
+                  e.preventDefault();
+                  e.dataTransfer.dropEffect = "move";
+                  if (dragOverId !== it.id) setDragOverId(it.id);
+                }}
+                onDragLeave={() => {
+                  if (dragOverId === it.id) setDragOverId(null);
+                }}
+                onDrop={(e) => {
+                  e.preventDefault();
+                  if (dragId) reorderByDrop(dragId, it.id);
+                  setDragId(null);
+                  setDragOverId(null);
+                }}
+                onDragEnd={() => {
+                  setDragId(null);
+                  setDragOverId(null);
+                }}
+                className={
+                  "card overflow-hidden flex flex-col cursor-move transition " +
+                  (dragId === it.id ? "opacity-40 " : "") +
+                  (dragOverId === it.id && dragId !== it.id
+                    ? "ring-2 ring-gold-500 "
+                    : "")
+                }
+              >
                 <div className="relative aspect-[2/3] bg-ink-900">
                   {/* eslint-disable-next-line @next/next/no-img-element */}
                   <img
                     src={it.poster.image_url}
                     alt={it.poster.title}
-                    className="absolute inset-0 w-full h-full object-cover"
+                    className="absolute inset-0 w-full h-full object-cover pointer-events-none"
                     loading="lazy"
                   />
                   <span className="absolute top-2 left-2 badge bg-black/60 border border-white/10">
@@ -230,6 +344,7 @@ export default function CollectionDetailPage() {
               </div>
             ))}
           </div>
+          </>
         )}
       </div>
 

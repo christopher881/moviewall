@@ -171,12 +171,26 @@ export default function PosterSlideshow({
   useEffect(() => {
     loadAll();
 
+    // Skip heartbeat-only updates — every minute the TV writes last_seen/is_online
+    // to its own row; we shouldn't refetch the whole playlist for that.
+    const HEARTBEAT_COLS = new Set(["last_seen", "is_online"]);
+    const onDisplayChange = (payload: {
+      new?: Record<string, unknown>;
+      old?: Record<string, unknown>;
+    }) => {
+      const next = payload.new ?? {};
+      const prev = payload.old ?? {};
+      const changed = Object.keys(next).filter((k) => next[k] !== prev[k]);
+      if (changed.length > 0 && changed.every((k) => HEARTBEAT_COLS.has(k))) return;
+      loadAll();
+    };
+
     const ch = supabase
       .channel(`tv-display-${displayId}`)
       .on(
         "postgres_changes",
         { event: "*", schema: "public", table: "displays", filter: `id=eq.${displayId}` },
-        loadAll
+        onDisplayChange
       )
       .on("postgres_changes", { event: "*", schema: "public", table: "collection_posters" }, loadAll)
       .on("postgres_changes", { event: "*", schema: "public", table: "collections" }, loadAll)
@@ -204,14 +218,27 @@ export default function PosterSlideshow({
   }, [display?.display_mode, loadAll]);
 
   // Rotation timer.
+  // Depend ONLY on the actual timing inputs — otherwise the 60s heartbeat updates
+  // the display row, changes the object reference, and resets this interval before
+  // it ever fires (which is why posters "get stuck" on the same image).
   useEffect(() => {
-    if (!display || posters.length <= 1) return;
-    const ms = Math.max(3, display.rotation_seconds) * 1000;
+    if (posters.length <= 1) return;
+    const seconds = Math.max(3, display?.rotation_seconds ?? 30);
+    const shuffle = display?.shuffle ?? false;
     const t = setInterval(() => {
-      setIndex((i) => (i + 1) % posters.length);
-    }, ms);
+      setIndex((i) => {
+        if (posters.length <= 1) return 0;
+        if (shuffle) {
+          // Pick a random index that isn't the current one.
+          let next = Math.floor(Math.random() * posters.length);
+          if (next === i) next = (next + 1) % posters.length;
+          return next;
+        }
+        return (i + 1) % posters.length;
+      });
+    }, seconds * 1000);
     return () => clearInterval(t);
-  }, [display, posters.length]);
+  }, [display?.rotation_seconds, display?.shuffle, posters.length]);
 
   // Heartbeat: mark online and update last_seen every 60s.
   useEffect(() => {

@@ -27,6 +27,11 @@ export default function PostersPage() {
   const [setActiveFor, setSetActiveFor] = useState<Poster | null>(null);
   const [busy, setBusy] = useState(false);
 
+  const [selectMode, setSelectMode] = useState(false);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [bulkCollectionOpen, setBulkCollectionOpen] = useState(false);
+  const [confirmBulkDelete, setConfirmBulkDelete] = useState(false);
+
   const load = useCallback(async () => {
     const [p, c, d] = await Promise.all([
       supabase.from("posters").select("*").order("created_at", { ascending: false }),
@@ -119,6 +124,105 @@ export default function PostersPage() {
     }
   }
 
+  function toggleSelect(p: Poster) {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(p.id)) next.delete(p.id);
+      else next.add(p.id);
+      return next;
+    });
+  }
+
+  function exitSelectMode() {
+    setSelectMode(false);
+    setSelectedIds(new Set());
+  }
+
+  async function bulkAddToCollection(collectionId: string) {
+    if (selectedIds.size === 0) return;
+    setBusy(true);
+    try {
+      const ids = Array.from(selectedIds);
+      const { data: existing } = await supabase
+        .from("collection_posters")
+        .select("poster_id")
+        .eq("collection_id", collectionId)
+        .in("poster_id", ids);
+      const already = new Set((existing ?? []).map((r) => r.poster_id as string));
+      const toAdd = ids.filter((id) => !already.has(id));
+      if (toAdd.length === 0) {
+        setBulkCollectionOpen(false);
+        exitSelectMode();
+        return;
+      }
+
+      const { data: max } = await supabase
+        .from("collection_posters")
+        .select("sort_order")
+        .eq("collection_id", collectionId)
+        .order("sort_order", { ascending: false })
+        .limit(1);
+      let nextSort = (max?.[0]?.sort_order ?? -1) + 1;
+
+      const rows = toAdd.map((posterId) => ({
+        collection_id: collectionId,
+        poster_id: posterId,
+        sort_order: nextSort++
+      }));
+      const { error: iErr } = await supabase.from("collection_posters").insert(rows);
+      if (iErr) throw iErr;
+
+      setBulkCollectionOpen(false);
+      exitSelectMode();
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function bulkDelete() {
+    if (selectedIds.size === 0) return;
+    setBusy(true);
+    try {
+      const ids = Array.from(selectedIds);
+      const targets = posters.filter((p) => selectedIds.has(p.id));
+      const paths = targets
+        .map((p) => p.storage_path)
+        .filter((p): p is string => !!p);
+      if (paths.length > 0) {
+        await supabase.storage.from(POSTER_BUCKET).remove(paths);
+      }
+      const { error: dErr } = await supabase.from("posters").delete().in("id", ids);
+      if (dErr) throw dErr;
+      setConfirmBulkDelete(false);
+      exitSelectMode();
+      await load();
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function bulkSetActive(active: boolean) {
+    if (selectedIds.size === 0) return;
+    setBusy(true);
+    try {
+      const { error: uErr } = await supabase
+        .from("posters")
+        .update({ active })
+        .in("id", Array.from(selectedIds));
+      if (uErr) throw uErr;
+      exitSelectMode();
+      await load();
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function setAsActiveOnDisplay(posterId: string, displayId: string) {
     setBusy(true);
     try {
@@ -145,17 +249,44 @@ export default function PostersPage() {
         subtitle={`${posters.length} poster${posters.length === 1 ? "" : "s"}`}
         onMenu={open}
         actions={
-          <>
-            <button
-              onClick={() => setBulkOpen(true)}
-              className="btn-secondary hidden sm:inline-flex"
-            >
-              + Bulk
-            </button>
-            <button onClick={() => setUploadOpen(true)} className="btn-primary">
-              + Upload
-            </button>
-          </>
+          selectMode ? (
+            <>
+              <button
+                onClick={() =>
+                  setSelectedIds(
+                    selectedIds.size === filtered.length
+                      ? new Set()
+                      : new Set(filtered.map((p) => p.id))
+                  )
+                }
+                className="btn-ghost"
+              >
+                {selectedIds.size === filtered.length ? "Clear" : "All"}
+              </button>
+              <button onClick={exitSelectMode} className="btn-secondary">
+                Done
+              </button>
+            </>
+          ) : (
+            <>
+              <button
+                onClick={() => setSelectMode(true)}
+                className="btn-ghost hidden sm:inline-flex"
+                disabled={posters.length === 0}
+              >
+                Select
+              </button>
+              <button
+                onClick={() => setBulkOpen(true)}
+                className="btn-secondary hidden sm:inline-flex"
+              >
+                + Bulk
+              </button>
+              <button onClick={() => setUploadOpen(true)} className="btn-primary">
+                + Upload
+              </button>
+            </>
+          )
         }
       />
       <div className="p-4 sm:p-8 space-y-6">
@@ -175,6 +306,15 @@ export default function PostersPage() {
           >
             + Bulk upload
           </button>
+          {!selectMode && (
+            <button
+              onClick={() => setSelectMode(true)}
+              className="btn-secondary sm:hidden"
+              disabled={posters.length === 0}
+            >
+              Select
+            </button>
+          )}
         </div>
 
         {loading ? (
@@ -193,11 +333,19 @@ export default function PostersPage() {
             )}
           </div>
         ) : (
-          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-3 sm:gap-4">
+          <div
+            className={
+              "grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-3 sm:gap-4" +
+              (selectMode && selectedIds.size > 0 ? " pb-24" : "")
+            }
+          >
             {filtered.map((p) => (
               <PosterCard
                 key={p.id}
                 poster={p}
+                selectMode={selectMode}
+                selected={selectedIds.has(p.id)}
+                onToggleSelect={toggleSelect}
                 onEdit={(x) => setEditPoster(x)}
                 onDelete={(x) => setConfirmDelete(x)}
                 onAddToCollection={(x) => setAddToCollectionFor(x)}
@@ -207,6 +355,44 @@ export default function PostersPage() {
           </div>
         )}
       </div>
+
+      {selectMode && selectedIds.size > 0 && (
+        <div className="fixed bottom-0 inset-x-0 z-30 p-3 sm:p-4 bg-ink-900/95 backdrop-blur border-t border-ink-700">
+          <div className="flex flex-wrap items-center gap-2 max-w-5xl mx-auto">
+            <span className="text-sm text-zinc-300 mr-auto">
+              {selectedIds.size} selected
+            </span>
+            <button
+              className="btn-primary"
+              disabled={busy}
+              onClick={() => setBulkCollectionOpen(true)}
+            >
+              + Add to collection
+            </button>
+            <button
+              className="btn-secondary"
+              disabled={busy}
+              onClick={() => bulkSetActive(true)}
+            >
+              Activate
+            </button>
+            <button
+              className="btn-secondary"
+              disabled={busy}
+              onClick={() => bulkSetActive(false)}
+            >
+              Deactivate
+            </button>
+            <button
+              className="btn-danger"
+              disabled={busy}
+              onClick={() => setConfirmBulkDelete(true)}
+            >
+              Delete
+            </button>
+          </div>
+        </div>
+      )}
 
       <Modal
         open={uploadOpen || !!editPoster}
@@ -294,6 +480,48 @@ export default function PostersPage() {
           </div>
         )}
       </Modal>
+
+      <Modal
+        open={bulkCollectionOpen}
+        onClose={() => setBulkCollectionOpen(false)}
+        title={`Add ${selectedIds.size} poster${selectedIds.size === 1 ? "" : "s"} to…`}
+      >
+        {collections.length === 0 ? (
+          <p className="text-sm text-zinc-400">
+            You don&apos;t have any collections yet. Create one from the Collections page.
+          </p>
+        ) : (
+          <div className="space-y-2">
+            {collections.map((c) => (
+              <button
+                key={c.id}
+                disabled={busy}
+                onClick={() => bulkAddToCollection(c.id)}
+                className="w-full text-left card card-hover p-3 flex items-center justify-between"
+              >
+                <span>
+                  <span className="font-medium">{c.name}</span>
+                  {c.description && (
+                    <span className="block text-xs text-zinc-400">{c.description}</span>
+                  )}
+                </span>
+                <span className="text-gold">+</span>
+              </button>
+            ))}
+          </div>
+        )}
+      </Modal>
+
+      <ConfirmModal
+        open={confirmBulkDelete}
+        onClose={() => setConfirmBulkDelete(false)}
+        onConfirm={bulkDelete}
+        title={`Delete ${selectedIds.size} poster${selectedIds.size === 1 ? "" : "s"}?`}
+        body="They'll be removed from your library, any collections, and Supabase Storage."
+        confirmLabel="Delete all"
+        danger
+        busy={busy}
+      />
 
       <Modal
         open={!!setActiveFor}
