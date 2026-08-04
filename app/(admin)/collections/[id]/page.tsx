@@ -25,6 +25,9 @@ export default function CollectionDetailPage() {
   const [dragId, setDragId] = useState<string | null>(null);
   const [dragOverId, setDragOverId] = useState<string | null>(null);
 
+  const [selectMode, setSelectMode] = useState(false);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+
   // Highest sort_order we've handed out locally. Prevents rapid successive adds
   // from all computing the same value before the realtime refresh lands.
   const nextSortRef = useRef(0);
@@ -209,6 +212,73 @@ export default function CollectionDetailPage() {
     await persistOrder(shuffled);
   }
 
+  function toggleSelect(linkId: string) {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(linkId)) next.delete(linkId);
+      else next.add(linkId);
+      return next;
+    });
+  }
+
+  function exitSelectMode() {
+    setSelectMode(false);
+    setSelectedIds(new Set());
+  }
+
+  /** Remove every selected poster from this collection, then re-pack order. */
+  async function bulkRemove() {
+    if (selectedIds.size === 0) return;
+    const ids = Array.from(selectedIds);
+    const remaining = items.filter((i) => !selectedIds.has(i.id));
+    setItems(remaining);
+    setBusy(true);
+    try {
+      const { error: dErr } = await supabase
+        .from("collection_posters")
+        .delete()
+        .in("id", ids);
+      if (dErr) throw dErr;
+      await persistOrder(remaining);
+      exitSelectMode();
+    } catch (err) {
+      setError((err as Error).message);
+      await load();
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  /** Activate / deactivate the underlying posters for everything selected. */
+  async function bulkSetActive(active: boolean) {
+    if (selectedIds.size === 0) return;
+    const posterIds = items
+      .filter((i) => selectedIds.has(i.id))
+      .map((i) => i.poster_id);
+    // Optimistic: reflect the new state on the cards right away.
+    setItems((prev) =>
+      prev.map((it) =>
+        selectedIds.has(it.id)
+          ? { ...it, poster: { ...it.poster, active } }
+          : it
+      )
+    );
+    setBusy(true);
+    try {
+      const { error: uErr } = await supabase
+        .from("posters")
+        .update({ active })
+        .in("id", posterIds);
+      if (uErr) throw uErr;
+      exitSelectMode();
+    } catch (err) {
+      setError((err as Error).message);
+      await load();
+    } finally {
+      setBusy(false);
+    }
+  }
+
   /**
    * Pointer-based drag. HTML5 drag-and-drop never fires on touch devices, so we
    * drive reordering from pointer events instead — one code path for mouse,
@@ -272,22 +342,49 @@ export default function CollectionDetailPage() {
         subtitle={`${items.length} poster${items.length === 1 ? "" : "s"}`}
         onMenu={open}
         actions={
-          <>
-            <Link href="/collections" className="btn-ghost hidden sm:inline-flex">
-              ← Back
-            </Link>
-            <button
-              onClick={randomizeOrder}
-              className="btn-secondary hidden sm:inline-flex"
-              disabled={busy || items.length < 2}
-              title="Shuffle the order of posters in this collection"
-            >
-              ⇄ Randomize
-            </button>
-            <button onClick={() => setPickerOpen(true)} className="btn-primary">
-              + Add posters
-            </button>
-          </>
+          selectMode ? (
+            <>
+              <button
+                onClick={() =>
+                  setSelectedIds(
+                    selectedIds.size === items.length
+                      ? new Set()
+                      : new Set(items.map((i) => i.id))
+                  )
+                }
+                className="btn-ghost"
+              >
+                {selectedIds.size === items.length ? "Clear" : "All"}
+              </button>
+              <button onClick={exitSelectMode} className="btn-secondary">
+                Done
+              </button>
+            </>
+          ) : (
+            <>
+              <Link href="/collections" className="btn-ghost hidden sm:inline-flex">
+                ← Back
+              </Link>
+              <button
+                onClick={() => setSelectMode(true)}
+                className="btn-ghost"
+                disabled={items.length === 0}
+              >
+                Select
+              </button>
+              <button
+                onClick={randomizeOrder}
+                className="btn-secondary hidden sm:inline-flex"
+                disabled={busy || items.length < 2}
+                title="Shuffle the order of posters in this collection"
+              >
+                ⇄ Randomize
+              </button>
+              <button onClick={() => setPickerOpen(true)} className="btn-primary">
+                + Add posters
+              </button>
+            </>
+          )
         }
       />
       <div className="p-4 sm:p-8 space-y-6">
@@ -306,92 +403,155 @@ export default function CollectionDetailPage() {
           <>
             <div className="flex flex-wrap items-center gap-2">
               <p className="text-xs text-zinc-500 mr-auto">
-                Drag the ⠿ handle to reorder, or use ↑ ↓. This is the slideshow order.
+                {selectMode
+                  ? "Tap posters to select them."
+                  : "Drag the ⠿ handle to reorder, or use ↑ ↓. This is the slideshow order."}
               </p>
-              <button
-                onClick={randomizeOrder}
-                className="btn-secondary sm:hidden text-xs"
-                disabled={busy || items.length < 2}
-              >
-                ⇄ Randomize
-              </button>
+              {!selectMode && (
+                <button
+                  onClick={randomizeOrder}
+                  className="btn-secondary sm:hidden text-xs"
+                  disabled={busy || items.length < 2}
+                >
+                  ⇄ Randomize
+                </button>
+              )}
             </div>
 
             <div
-              className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-3 sm:gap-4 mt-3"
+              className={
+                "grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-3 sm:gap-4 mt-3" +
+                (selectMode && selectedIds.size > 0 ? " pb-24" : "")
+              }
               onPointerMove={handleDragMove}
               onPointerUp={handleDragEnd}
               onPointerCancel={handleDragEnd}
             >
-              {items.map((it, idx) => (
-                <div
-                  key={it.id}
-                  data-link-id={it.id}
-                  className={
-                    "card overflow-hidden flex flex-col transition " +
-                    (dragId === it.id ? "opacity-40 " : "") +
-                    (dragOverId === it.id && dragId && dragId !== it.id
-                      ? "ring-2 ring-gold-500 "
-                      : "")
-                  }
-                >
-                  <div className="relative aspect-[2/3] bg-ink-900">
-                    {/* eslint-disable-next-line @next/next/no-img-element */}
-                    <img
-                      src={it.poster.image_url}
-                      alt={it.poster.title}
-                      className="absolute inset-0 w-full h-full object-cover pointer-events-none"
-                      loading="lazy"
-                    />
-                    <span className="absolute top-2 left-2 badge bg-black/60 border border-white/10">
-                      #{idx + 1}
-                    </span>
-                    <button
-                      type="button"
-                      aria-label="Drag to reorder"
-                      onPointerDown={(e) => handleDragStart(e, it.id)}
-                      style={{ touchAction: "none" }}
-                      className="absolute top-1.5 right-1.5 w-8 h-8 rounded-lg bg-black/60 border border-white/10 text-white/80 flex items-center justify-center cursor-grab active:cursor-grabbing hover:bg-black/80"
-                    >
-                      ⠿
-                    </button>
-                  </div>
-                  <div className="p-2">
-                    <p className="text-sm truncate">{it.poster.title}</p>
-                    <div className="flex justify-between mt-1">
-                      <div className="flex gap-1">
-                        <button
-                          className="btn-ghost text-xs px-2 py-1"
-                          disabled={busy || idx === 0}
-                          onClick={() => move(it.id, -1)}
-                          aria-label="Move up"
+              {items.map((it, idx) => {
+                const selected = selectedIds.has(it.id);
+                return (
+                  <div
+                    key={it.id}
+                    data-link-id={it.id}
+                    onClick={selectMode ? () => toggleSelect(it.id) : undefined}
+                    className={
+                      "card overflow-hidden flex flex-col transition " +
+                      (selectMode ? "cursor-pointer " : "") +
+                      (selected ? "ring-2 ring-gold-500 border-gold-500/50 " : "") +
+                      (dragId === it.id ? "opacity-40 " : "") +
+                      (dragOverId === it.id && dragId && dragId !== it.id
+                        ? "ring-2 ring-gold-500 "
+                        : "")
+                    }
+                  >
+                    <div className="relative aspect-[2/3] bg-ink-900">
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                      <img
+                        src={it.poster.image_url}
+                        alt={it.poster.title}
+                        className={
+                          "absolute inset-0 w-full h-full object-cover pointer-events-none " +
+                          (it.poster.active ? "" : "opacity-40 grayscale")
+                        }
+                        loading="lazy"
+                      />
+                      <span className="absolute top-2 left-2 badge bg-black/60 border border-white/10">
+                        #{idx + 1}
+                      </span>
+                      {!it.poster.active && (
+                        <span className="absolute bottom-2 left-2 badge-inactive">
+                          Inactive
+                        </span>
+                      )}
+                      {selectMode ? (
+                        <div
+                          className={
+                            "absolute top-1.5 right-1.5 w-7 h-7 rounded-full border-2 flex items-center justify-center text-xs " +
+                            (selected
+                              ? "bg-gold-500 border-gold-500 text-ink-950"
+                              : "bg-black/50 border-white/70 text-transparent")
+                          }
                         >
-                          ↑
-                        </button>
+                          ✓
+                        </div>
+                      ) : (
                         <button
-                          className="btn-ghost text-xs px-2 py-1"
-                          disabled={busy || idx === items.length - 1}
-                          onClick={() => move(it.id, 1)}
-                          aria-label="Move down"
+                          type="button"
+                          aria-label="Drag to reorder"
+                          onPointerDown={(e) => handleDragStart(e, it.id)}
+                          style={{ touchAction: "none" }}
+                          className="absolute top-1.5 right-1.5 w-8 h-8 rounded-lg bg-black/60 border border-white/10 text-white/80 flex items-center justify-center cursor-grab active:cursor-grabbing hover:bg-black/80"
                         >
-                          ↓
+                          ⠿
                         </button>
-                      </div>
-                      <button
-                        className="btn-ghost text-xs px-2 py-1 text-red-400"
-                        disabled={busy}
-                        onClick={() => removeLink(it.id)}
-                      >
-                        Remove
-                      </button>
+                      )}
+                    </div>
+                    <div className="p-2">
+                      <p className="text-sm truncate">{it.poster.title}</p>
+                      {!selectMode && (
+                        <div className="flex justify-between mt-1">
+                          <div className="flex gap-1">
+                            <button
+                              className="btn-ghost text-xs px-2 py-1"
+                              disabled={busy || idx === 0}
+                              onClick={() => move(it.id, -1)}
+                              aria-label="Move up"
+                            >
+                              ↑
+                            </button>
+                            <button
+                              className="btn-ghost text-xs px-2 py-1"
+                              disabled={busy || idx === items.length - 1}
+                              onClick={() => move(it.id, 1)}
+                              aria-label="Move down"
+                            >
+                              ↓
+                            </button>
+                          </div>
+                          <button
+                            className="btn-ghost text-xs px-2 py-1 text-red-400"
+                            disabled={busy}
+                            onClick={() => removeLink(it.id)}
+                          >
+                            Remove
+                          </button>
+                        </div>
+                      )}
                     </div>
                   </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
           </>
         )}
       </div>
+
+      {selectMode && selectedIds.size > 0 && (
+        <div className="fixed bottom-0 inset-x-0 z-30 p-3 sm:p-4 bg-ink-900/95 backdrop-blur border-t border-ink-700">
+          <div className="flex flex-wrap items-center gap-2 max-w-5xl mx-auto">
+            <span className="text-sm text-zinc-300 mr-auto">
+              {selectedIds.size} selected
+            </span>
+            <button
+              className="btn-secondary"
+              disabled={busy}
+              onClick={() => bulkSetActive(true)}
+            >
+              Activate
+            </button>
+            <button
+              className="btn-secondary"
+              disabled={busy}
+              onClick={() => bulkSetActive(false)}
+            >
+              Deactivate
+            </button>
+            <button className="btn-danger" disabled={busy} onClick={bulkRemove}>
+              Remove from collection
+            </button>
+          </div>
+        </div>
+      )}
 
       <Modal
         open={pickerOpen}
