@@ -278,29 +278,33 @@ function Toggle({
   checked: boolean;
   onChange: (v: boolean) => void;
 }) {
+  // A single <button role="switch"> — deliberately NOT a <label> wrapping a
+  // hidden checkbox. That older shape fired onChange twice per tap (once from
+  // the switch, once from the label forwarding the click to the input), so the
+  // two flips cancelled and the toggle appeared frozen.
   return (
-    <label className="flex items-center justify-between gap-3 card p-3 cursor-pointer">
+    <button
+      type="button"
+      role="switch"
+      aria-checked={checked}
+      onClick={() => onChange(!checked)}
+      className="flex items-center justify-between gap-3 card p-3 w-full text-left cursor-pointer select-none active:bg-ink-800 transition"
+    >
       <span className="text-sm">{label}</span>
       <span
-        onClick={() => onChange(!checked)}
+        aria-hidden
         className={
-          "relative w-11 h-6 rounded-full transition " +
+          "relative shrink-0 w-12 h-7 rounded-full transition-colors " +
           (checked ? "bg-gold-500" : "bg-ink-600")
         }
       >
         <span
           className={
-            "absolute top-0.5 w-5 h-5 rounded-full bg-white transition " +
-            (checked ? "left-5" : "left-0.5")
+            "absolute top-1 w-5 h-5 rounded-full bg-white transition-all " +
+            (checked ? "left-6" : "left-1")
           }
         />
       </span>
-      <input
-        type="checkbox"
-        className="sr-only"
-        checked={checked}
-        onChange={(e) => onChange(e.target.checked)}
-      />
-    </label>
+    </button>
   );
 }
